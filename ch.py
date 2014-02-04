@@ -392,14 +392,14 @@ class PM:
 
   def block(self, user):
     if user not in self._blocklist:
-      self._sendCommand("block", user.name)
-      self._block.remove(user)
+      self._sendCommand("block", user.name,user.name,"S")
+      self._blocklist.add(user)
       self._callEvent("onPMBlock", user)
 
   def unblock(self, user):
     if user in self._blocklist:
       self._sendCommand("unblock", user.name)
-      self._block.remove(user)
+      self._blocklist.remove(user)
       self._callEvent("onPMUnblock", user)
 
   ####
@@ -891,6 +891,7 @@ class Room:
   def rcmd_unblocked(self, args):
     if args[2] == "": return
     target = User(args[2])
+    user=User(args[3])
     self._callEvent("onUnban", user, target)
     self.requestBanlist()
 

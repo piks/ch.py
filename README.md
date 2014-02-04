@@ -15,3 +15,4 @@ it and I just happened to be the one of the few who tried to pick up the pieces.
   neither am i the original author, but merely just the 2nd current maintainer,
 i just patch up whatever error make by nullspeaker and others people's patch for the ch.py,
 upgrading it when needed or wanted by other people and fixing it when it's broken. ~~~~ asl97
+---- I'm just fixing stuff I find broken //a lot ~Pika

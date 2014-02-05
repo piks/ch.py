@@ -1,5 +1,5 @@
 #!/usr/bin/python
-import ch,sys
+import ch
 
 class TestBot(ch.RoomManager):
 

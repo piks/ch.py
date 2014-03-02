@@ -1,5 +1,5 @@
 #!/usr/bin/python
-import ch,sys
+import ch
 
 class TestBot(ch.RoomManager):
 
@@ -16,8 +16,8 @@ class TestBot(ch.RoomManager):
     # Use with PsyfrBot framework? :3
     self.safePrint(user.name + ': ' + message.body)
 
-     if message.body.startswith("!a"):
-        room.message("AAAAAAAAAAAAAA")
+    if message.body.startswith("!a"):
+      room.message("AAAAAAAAAAAAAA")
         
   def onFloodBan(self, room):
     print("You are flood banned in "+room.name)

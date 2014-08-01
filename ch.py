@@ -833,7 +833,7 @@ class Room:
     return [x.name for x in mods]
   def _getUserCount(self): return self._userCount
   def _getSilent(self): return self._silent
-  def _setSilent(self, val): self._silent = val
+  def setSilent(self, val): self._silent = val
   def _getBanlist(self): return list(self._banlist.keys())
   def _getUnBanlist(self): return [[record["target"], record["src"]] for record in self._unbanlist.values()]
 

@@ -1,13 +1,29 @@
 ################################################################
 # File: ch.py
 # Title: Chatango Library
-# Author: Lumirayz/Lumz <lumirayz@gmail.com>
-# Version: 1.3.4a
+# Original Author: Lumirayz/Lumz <lumirayz@gmail.com>
+# Current Maintainers and Contributors:
+#  Nullspeaker <import codecs;codecs.encode('aunzzbaq129@tznvy.pbz','rot_13')>
+#  asl97 <asl97@outlook.com>
+#  pystub
+#  dani87
+#  domzy
+#  kamijoutouma
+#  piks
+# Version: 1.3.7
 # Description:
 #  An event-based library for connecting to one or multiple Chatango rooms, has
 #  support for several things including: messaging, message font,
 #  name color, deleting, banning, recent history, 2 userlist modes,
 #  flagging, avoiding flood bans, detecting flags.
+# Contact Info:
+#  Any question, comment, or suggestion should be directed to the current
+#  maintainers and contributors, located at:
+#   https://github.com/Nullspeaker/ch.py
+#  Where a more satisfactory response to all bug reports (which can be made on the
+#  issues page) and other statements can be garnered. For things not specific or
+#  in direct reference to this library, 'ch.py', a direct response can be filed
+#  to the individual persons listed above as 'Current Maintainers and Contributors.'
 ################################################################
 
 ################################################################
@@ -27,6 +43,10 @@ import re
 import sys
 import select
 
+################################################################
+# Debug stuff
+################################################################
+debug = False
 
 ################################################################
 # Python 2 compatibility
@@ -37,7 +57,9 @@ if sys.version_info[0] < 3:
     request = __import__("urllib2")
   input = raw_input
   import codecs
+  import Queue as queue
 else:
+  import queue
   import urllib.request
   import urllib.parse
 
@@ -50,6 +72,8 @@ Userlist_All = 1
 BigMessage_Multiple = 0
 BigMessage_Cut = 1
 
+# minimum of 1 thread needed
+Number_of_Threads = 1
 ################################################################
 # Struct class
 ################################################################
@@ -99,13 +123,16 @@ def getServer(group):
 ################################################################
 # Uid
 ################################################################
-def genUid():
+def _genUid():
+  """
+  generate a uid
+  """
   return str(random.randrange(10 ** 15, 10 ** 16))
 
 ################################################################
 # Message stuff
 ################################################################
-def clean_message(msg):
+def _clean_message(msg):
   """
   Clean a message and return the message, n tag and f tag.
 
@@ -121,7 +148,7 @@ def clean_message(msg):
   if f: f = f.group(1)
   msg = re.sub("<n.*?/>", "", msg)
   msg = re.sub("<f.*?>", "", msg)
-  msg = strip_html(msg)
+  msg = _strip_html(msg)
   msg = msg.replace("&lt;", "<")
   msg = msg.replace("&gt;", ">")
   msg = msg.replace("&quot;", "\"")
@@ -129,7 +156,7 @@ def clean_message(msg):
   msg = msg.replace("&amp;", "&")
   return msg, n, f
 
-def strip_html(msg):
+def _strip_html(msg):
   """Strip HTML."""
   li = msg.split("<")
   if len(li) == 1:
@@ -144,12 +171,12 @@ def strip_html(msg):
         ret.append(data[1])
     return "".join(ret)
 
-def parseNameColor(n):
+def _parseNameColor(n):
   """This just returns its argument, should return the name color."""
   #probably is already the name
   return n
 
-def parseFont(f):
+def _parseFont(f):
   """Parses the contents of a f tag and returns color, face and size."""
   #' xSZCOL="FONT"'
   try: #TODO: remove quick hack
@@ -166,7 +193,7 @@ def parseFont(f):
 ################################################################
 # Anon id
 ################################################################
-def getAnonId(n, ssid):
+def _getAnonId(n, ssid):
   """Gets the anon's id."""
   if n == None: n = "5504"
   try:
@@ -180,101 +207,46 @@ def getAnonId(n, ssid):
     return "NNNN"
 
 ################################################################
-# PM Auth
+# ANON PM class
 ################################################################
-auth_re = re.compile(r"auth\.chatango\.com ?= ?([^;]*)", re.IGNORECASE)
 
-def _getAuth(name, password):
-  """
-  Request an auid using name and password.
-
-  @type name: str
-  @param name: name
-  @type password: str
-  @param password: password
-
-  @rtype: str
-  @return: auid
-  """
-  data = urllib.parse.urlencode({
-    "user_id": name,
-    "password": password,
-    "storecookie": "on",
-    "checkerrors": "yes"
-  }).encode()
-  try:
-    resp = urllib.request.urlopen("http://chatango.com/login", data)
-    headers = resp.headers
-  except Exception:
-    return None
-  for header, value in headers.items():
-    if header.lower() == "set-cookie":
-      m = auth_re.search(value)
-      if m:
-        auth = m.group(1)
-        if auth == "":
-          return None
-        return auth
-  return None
-
-################################################################
-# PM class
-################################################################
-class PM:
-  """Manages a connection with Chatango PM."""
-  ####
-  # Init
-  ####
-  def __init__(self, mgr):
+class _ANON_PM_OBJECT:
+  """Manages connection with Chatango anon PM."""
+  def __init__(self, mgr, name):
     self._connected = False
     self._mgr = mgr
-    self._auid = None
-    self._blocklist = set()
-    self._contacts = set()
     self._wlock = False
     self._firstCommand = True
     self._wbuf = b""
     self._wlockbuf = b""
     self._rbuf = b""
     self._pingTask = None
-    self._connect()
-    if sys.version_info[0] < 3 and sys.platform.startswith("win"):
-      self.unicodeCompat = False
-    else:
-      self.unicodeCompat = True
-
-  ####
-  # Connections
-  ####
-  def _connect(self):
-    self._wbuf = b""
-    self._sock = socket.socket()
-    self._sock.connect((self._mgr._PMHost, self._mgr._PMPort))
-    self._sock.setblocking(False)
-    self._firstCommand = True
-    if not self._auth(): return
-    self._pingTask = self.mgr.setInterval(self._mgr._pingDelay, self.ping)
-    self._connected = True
+    self._name = name
 
   def _auth(self):
-    self._auid = _getAuth(self._mgr.name, self._mgr.password)
-    if self._auid == None:
-      self._sock.close()
-      self._callEvent("onLoginFail")
-      self._sock = None
-      return False
-    self._sendCommand("tlogin", self._auid, "2")
+    self._sendCommand("mhs","mini","unknown","%s" % (self._name))
     self._setWriteLock(True)
     return True
 
   def disconnect(self):
+    """Disconnect the bot from PM"""
     self._disconnect()
-    self._callEvent("onPMDisconnect")
+    self._callEvent("onAnonPMDisconnect", User(self._name))
 
   def _disconnect(self):
     self._connected = False
     self._sock.close()
     self._sock = None
+
+  def ping(self):
+    """send a ping"""
+    self._sendCommand("")
+    self._callEvent("onPMPing")
+
+  def message(self, user, msg):
+    """send a pm to a user"""
+    if msg!=None:
+      self._sendCommand("msg", user.name, msg)
 
   ####
   # Feed
@@ -290,10 +262,7 @@ class PM:
     while self._rbuf.find(b"\x00") != -1:
       data = self._rbuf.split(b"\x00")
       for food in data[:-1]:
-        if self.unicodeCompat:
-          self._process(food.decode().rstrip("\r\n"))
-        else:
-          self._process(food.decode(errors="replace").rstrip("\r\n"))
+        self._process(food.decode(errors="replace").rstrip("\r\n"))
       self._rbuf = data[-1]
 
   def _process(self, data):
@@ -306,101 +275,34 @@ class PM:
     self._callEvent("onRaw", data)
     data = data.split(":")
     cmd, args = data[0], data[1:]
-    func = "rcmd_" + cmd
+    func = "_rcmd_" + cmd
     if hasattr(self, func):
       getattr(self, func)(args)
+    else:
+      if debug:
+        print("unknown data: "+str(data))
 
-  ####
-  # Properties
-  ####
-  def getManager(self): return self._mgr
-  def getContacts(self): return self._contacts
-  def getBlocklist(self): return self._blocklist
+  def _getManager(self): return self._mgr
 
-  mgr = property(getManager)
-  contacts = property(getContacts)
-  blocklist = property(getBlocklist)
+  mgr = property(_getManager)
 
   ####
   # Received Commands
   ####
-  def rcmd_OK(self, args):
+
+  def _rcmd_mhs(self, args):
+    """
+    note to future maintainers
+    
+    args[1] is ether "online" or "offline"
+    """
+    self._connected = True
     self._setWriteLock(False)
-    self._sendCommand("wl")
-    self._sendCommand("getblock")
-    self._callEvent("onPMConnect")
 
-  def rcmd_wl(self, args):
-    self._contacts = set()
-    for i in range(len(args) // 4):
-      name, last_on, is_on, idle = args[i * 4: i * 4 + 4]
-      user = User(name)
-      self._contacts.add(user)
-    self._callEvent("onPMContactlistReceive")
-
-  def rcmd_block_list(self, args):
-    self._blocklist = set()
-    for name in args:
-      if name == "": continue
-      self._blocklist.add(User(name))
-
-  def rcmd_DENIED(self, args):
-    self._disconnect()
-    self._callEvent("onLoginFail")
-
-  def rcmd_msg(self, args):
+  def _rcmd_msg(self, args):
     user = User(args[0])
-    body = strip_html(":".join(args[5:])) if self.unicodeCompat else  strip_html(":".join(args[5:])) .encode("ascii","ignore").decode("ascii")
+    body = _strip_html(":".join(args[5:]))
     self._callEvent("onPMMessage", user, body)
-
-  def rcmd_msgoff(self, args):
-    user = User(args[0])
-    body = strip_html(":".join(args[5:]))
-    self._callEvent("onPMOfflineMessage", user, body)
-
-  def rcmd_wlonline(self, args):
-    self._callEvent("onPMContactOnline", User(args[0]))
-
-  def rcmd_wloffline(self, args):
-    self._callEvent("onPMContactOffline", User(args[0]))
-
-  def rcmd_kickingoff(self, args):
-    self.disconnect()
-
-  ####
-  # Commands
-  ####
-  def ping(self):
-    self._sendCommand("")
-    self._callEvent("onPMPing")
-
-  def message(self, user, msg):
-    if msg!=None:
-      self._sendCommand("msg", user.name, msg)
-
-  def addContact(self, user):
-    if user not in self._contacts:
-      self._sendCommand("wladd", user.name)
-      self._contacts.add(user)
-      self._callEvent("onPMContactAdd", user)
-
-  def removeContact(self, user):
-    if user in self._contacts:
-      self._sendCommand("wldelete", user.name)
-      self._contacts.remove(user)
-      self._callEvent("onPMContactRemove", user)
-
-  def block(self, user):
-    if user not in self._blocklist:
-      self._sendCommand("block", user.name,user.name,"S")
-      self._blocklist.add(user)
-      self._callEvent("onPMBlock", user)
-
-  def unblock(self, user):
-    if user in self._blocklist:
-      self._sendCommand("unblock", user.name)
-      self._blocklist.remove(user)
-      self._callEvent("onPMUnblock", user)
 
   ####
   # Util
@@ -435,6 +337,361 @@ class PM:
       terminator = b"\r\n\x00"
     self._write(":".join(args).encode() + terminator)
 
+class ANON_PM:
+  """Comparable wrapper for anon Chatango PM"""
+  ####
+  # Init
+  ####
+  def __init__(self, mgr):
+    self._mgr = mgr
+    self._wlock = False
+    self._firstCommand = True
+    self._persons = dict()
+    self._wlockbuf = b""
+    self._pingTask = None
+
+  ####
+  # Connections
+  ####
+  def _connect(self,name):
+    self._persons[name] = _ANON_PM_OBJECT(self._mgr,name)
+    sock = socket.socket()
+    sock.connect((self._mgr._anonPMHost, self._mgr._PMPort))
+    sock.setblocking(False)
+    self._persons[name]._sock = sock
+    if not self._persons[name]._auth(): return
+    self._persons[name]._pingTask = self._mgr.setInterval(self._mgr._pingDelay, self._persons[name].ping)
+    self._persons[name]._connected = True
+
+  def message(self, user, msg):
+    """send a pm to a user"""
+    if not user.name in self._persons:
+      self._connect(user.name)
+    self._persons[user.name].message(user,msg)
+
+  def getConnections(self):
+    return list(self._persons.values())
+
+################################################################
+# PM class
+################################################################
+class PM:
+  """Manages a connection with Chatango PM."""
+  ####
+  # Init
+  ####
+  def __init__(self, mgr):
+    self._auth_re = re.compile(r"auth\.chatango\.com ?= ?([^;]*)", re.IGNORECASE)
+    self._connected = False
+    self._mgr = mgr
+    self._auid = None
+    self._blocklist = set()
+    self._contacts = set()
+    self._status = dict()
+    self._wlock = False
+    self._firstCommand = True
+    self._wbuf = b""
+    self._wlockbuf = b""
+    self._rbuf = b""
+    self._pingTask = None
+    self._connect()
+
+  ####
+  # Connections
+  ####
+  def _connect(self):
+    self._wbuf = b""
+    self._sock = socket.socket()
+    self._sock.connect((self._mgr._PMHost, self._mgr._PMPort))
+    self._sock.setblocking(False)
+    self._firstCommand = True
+    if not self._auth(): return
+    self._pingTask = self.mgr.setInterval(self._mgr._pingDelay, self.ping)
+    self._connected = True
+
+
+  def _getAuth(self, name, password):
+    """
+    Request an auid using name and password.
+
+    @type name: str
+    @param name: name
+    @type password: str
+    @param password: password
+
+    @rtype: str
+    @return: auid
+    """
+    data = urllib.parse.urlencode({
+      "user_id": name,
+      "password": password,
+      "storecookie": "on",
+      "checkerrors": "yes"
+    }).encode()
+    try:
+      resp = urllib.request.urlopen("http://chatango.com/login", data)
+      headers = resp.headers
+    except Exception:
+      return None
+    for header, value in headers.items():
+      if header.lower() == "set-cookie":
+        m = self._auth_re.search(value)
+        if m:
+          auth = m.group(1)
+          if auth == "":
+            return None
+          return auth
+    return None
+
+  def _auth(self):
+    self._auid = self._getAuth(self._mgr.name, self._mgr.password)
+    if self._auid == None:
+      self._sock.close()
+      self._callEvent("onLoginFail")
+      self._sock = None
+      return False
+    self._sendCommand("tlogin", self._auid, "2")
+    self._setWriteLock(True)
+    return True
+
+  def disconnect(self):
+    """Disconnect the bot from PM"""
+    self._disconnect()
+    self._callEvent("onPMDisconnect")
+
+  def _disconnect(self):
+    self._connected = False
+    self._sock.close()
+    self._sock = None
+
+  ####
+  # Feed
+  ####
+  def _feed(self, data):
+    """
+    Feed data to the connection.
+
+    @type data: bytes
+    @param data: data to be fed
+    """
+    self._rbuf += data
+    while self._rbuf.find(b"\x00") != -1:
+      data = self._rbuf.split(b"\x00")
+      for food in data[:-1]:
+        self._process(food.decode(errors="replace").rstrip("\r\n"))
+      self._rbuf = data[-1]
+
+  def _process(self, data):
+    """
+    Process a command string.
+
+    @type data: str
+    @param data: the command string
+    """
+    self._callEvent("onRaw", data)
+    data = data.split(":")
+    cmd, args = data[0], data[1:]
+    func = "_rcmd_" + cmd
+    if hasattr(self, func):
+      getattr(self, func)(args)
+    else:
+      if debug:
+        print("unknown data: "+str(data))
+
+  ####
+  # Properties
+  ####
+  def _getManager(self): return self._mgr
+  def _getContacts(self): return self._contacts
+  def _getBlocklist(self): return self._blocklist
+
+  mgr = property(_getManager)
+  contacts = property(_getContacts)
+  blocklist = property(_getBlocklist)
+
+  ####
+  # Received Commands
+  ####
+  def _rcmd_OK(self, args):
+    self._setWriteLock(False)
+    self._sendCommand("wl")
+    self._sendCommand("getblock")
+    self._callEvent("onPMConnect")
+
+  def _rcmd_wl(self, args):
+    self._contacts = set()
+    for i in range(len(args) // 4):
+      name, last_on, is_on, idle = args[i * 4: i * 4 + 4]
+      user = User(name)
+      if last_on=="None":pass#in case chatango gives a "None" as data argument
+      elif not is_on == "on": self._status[user] = [int(last_on), False, 0]
+      elif idle == '0': self._status[user] = [int(last_on), True, 0]
+      else: self._status[user] = [int(last_on), True, time.time() - int(idle) * 60]
+      self._contacts.add(user)
+    self._callEvent("onPMContactlistReceive")
+
+  def _rcmd_block_list(self, args):
+    self._blocklist = set()
+    for name in args:
+      if name == "": continue
+      self._blocklist.add(User(name))
+
+  def _rcmd_idleupdate(self, args):
+    user = User(args[0])
+    last_on, is_on, idle = self._status[user]
+    if args[1] == '1':
+      self._status[user] = [last_on, is_on, 0]
+    else:
+      self._status[user] = [last_on, is_on, time.time()]
+
+  def _rcmd_track(self, args):
+    user = User(args[0])
+    if user in self._status:
+      last_on = self._status[user][0]
+    else:
+      last_on = 0
+    if args[1] == '0':
+      idle = 0
+    else:
+      idle = time.time() - int(args[1]) * 60
+    if args[2] == "online":
+      is_on = True
+    else:
+      is_on = False
+    self._status[user] = [last_on, is_on, idle]
+
+  def _rcmd_DENIED(self, args):
+    self._disconnect()
+    self._callEvent("onLoginFail")
+
+  def _rcmd_msg(self, args):
+    user = User(args[0])
+    body = _strip_html(":".join(args[5:]))
+    self._callEvent("onPMMessage", user, body)
+
+  def _rcmd_msgoff(self, args):
+    user = User(args[0])
+    body = _strip_html(":".join(args[5:]))
+    self._callEvent("onPMOfflineMessage", user, body)
+
+  def _rcmd_wlonline(self, args):
+    user = User(args[0])
+    last_on = float(args[1])
+    self._status[user] = [last_on,True,last_on]
+    self._callEvent("onPMContactOnline", user)
+
+  def _rcmd_wloffline(self, args):
+    user = User(args[0])
+    last_on = float(args[1])
+    self._status[user] = [last_on,False,0]
+    self._callEvent("onPMContactOffline", user)
+
+  def _rcmd_kickingoff(self, args):
+    self.disconnect()
+
+  def _rcmd_toofast(self, args):
+    self.disconnect()
+
+  def _rcmd_unblocked(self, user):
+    """call when successfully unblocked"""
+    if user in self._blocklist:
+      self._blocklist.remove(user)
+      self._callEvent("onPMUnblock", user)
+
+
+  ####
+  # Commands
+  ####
+  def ping(self):
+    """send a ping"""
+    self._sendCommand("")
+    self._callEvent("onPMPing")
+
+  def message(self, user, msg):
+    """send a pm to a user"""
+    if msg!=None:
+      self._sendCommand("msg", user.name, msg)
+
+  def addContact(self, user):
+    """add contact"""
+    if user not in self._contacts:
+      self._sendCommand("wladd", user.name)
+      self._contacts.add(user)
+      self._callEvent("onPMContactAdd", user)
+
+  def removeContact(self, user):
+    """remove contact"""
+    if user in self._contacts:
+      self._sendCommand("wldelete", user.name)
+      self._contacts.remove(user)
+      self._callEvent("onPMContactRemove", user)
+
+  def block(self, user):
+    """block a person"""
+    if user not in self._blocklist:
+      self._sendCommand("block", user.name, user.name, "S")
+      self._blocklist.add(user)
+      self._callEvent("onPMBlock", user)
+
+  def unblock(self, user):
+    """unblock a person"""
+    if user in self._blocklist:
+      self._sendCommand("unblock", user.name)
+
+  def track(self, user):
+    """get and store status of person for future use"""
+    self._sendCommand("track", user.name)
+
+  def checkOnline(self, user):
+    """return True if online, False if offline, None if unknown"""
+    if user in self._status:
+      return self._status[user][1]
+    else:
+      return None
+
+  def getIdle(self, user):
+    """return last active time, time.time() if isn't idle, 0 if offline, None if unknown"""
+    if not user in self._status: return None
+    if not self._status[user][1]: return 0
+    if not self._status[user][2]: return time.time()
+    else: return self._status[user][2]
+
+  ####
+  # Util
+  ####
+  def _callEvent(self, evt, *args, **kw):
+    getattr(self.mgr, evt)(self, *args, **kw)
+    self.mgr.onEventCalled(self, evt, *args, **kw)
+
+  def _write(self, data):
+    if self._wlock:
+      self._wlockbuf += data
+    else:
+      self.mgr._write(self, data)
+
+  def _setWriteLock(self, lock):
+    self._wlock = lock
+    if self._wlock == False:
+      self._write(self._wlockbuf)
+      self._wlockbuf = b""
+
+  def _sendCommand(self, *args):
+    """
+    Send a command.
+
+    @type args: [str, str, ...]
+    @param args: command and list of arguments
+    """
+    if self._firstCommand:
+      terminator = b"\x00"
+      self._firstCommand = False
+    else:
+      terminator = b"\r\n\x00"
+    self._write(":".join(args).encode() + terminator)
+
+  def getConnections(self):
+    return [self]
+
 ################################################################
 # Room class
 ################################################################
@@ -444,6 +701,7 @@ class Room:
   # Init
   ####
   def __init__(self, room, uid = None, server = None, port = None, mgr = None):
+    """init, don't overwrite"""
     # Basic stuff
     self._name = room
     self._server = server or getServer(room)
@@ -453,7 +711,7 @@ class Room:
     # Under the hood
     self._connected = False
     self._reconnecting = False
-    self._uid = uid or genUid()
+    self._uid = uid or _genUid()
     self._rbuf = b""
     self._wbuf = b""
     self._wlockbuf = b""
@@ -473,28 +731,11 @@ class Room:
     self._msgs = dict()
     self._wlock = False
     self._silent = False
-    self._banlist = list()
-    if sys.version_info[0] < 3 and sys.platform.startswith("win"):
-      self.unicodeCompat = False
-    else:
-      self.unicodeCompat = True
+    self._banlist = dict()
+    self._unbanlist = dict()
 
     # Inited vars
     if self._mgr: self._connect()
-
-  ####
-  # User and Message management
-  ####
-  def getMessage(self, mid):
-    return self._msgs.get(mid)
-
-  def createMessage(self, msgid, **kw):
-    if msgid not in self._msgs:
-      msg = Message(msgid = msgid, **kw)
-      self._msgs[msgid] = msg
-    else:
-      msg = self._msgs[msgid]
-    return msg
 
   ####
   # Connect/disconnect
@@ -519,7 +760,7 @@ class Room:
     self._reconnecting = True
     if self.connected:
       self._disconnect()
-    self._uid = genUid()
+    self._uid = _genUid()
     self._connect()
     self._reconnecting = False
 
@@ -553,17 +794,17 @@ class Room:
   ####
   # Properties
   ####
-  def getName(self): return self._name
-  def getBotName(self):
+  def _getName(self): return self._name
+  def _getBotName(self):
     if self.mgr.name and self.mgr.password:
       return self.mgr.name
     elif self.mgr.name and self.mgr.password == None:
       return "#" + self.mgr.name
     elif self.mgr.name == None:
       return self._botname
-  def getCurrentname(self): return self._currentname
-  def getManager(self): return self._mgr
-  def getUserlist(self, mode = None, unique = None, memory = None):
+  def _getCurrentname(self): return self._currentname
+  def _getManager(self): return self._mgr
+  def _getUserlist(self, mode = None, unique = None, memory = None):
     ul = None
     if mode == None: mode = self.mgr._userlistMode
     if unique == None: unique = self.mgr._userlistUnique
@@ -576,39 +817,41 @@ class Room:
       return list(set(ul))
     else:
       return ul
-  def getUserNames(self):
+  def _getUserNames(self):
     ul = self.userlist
     return list(map(lambda x: x.name, ul))
-  def getUser(self): return self.mgr.user
-  def getOwner(self): return self._owner
-  def getOwnerName(self): return self._owner.name
-  def getMods(self):
+  def _getUser(self): return self.mgr.user
+  def _getOwner(self): return self._owner
+  def _getOwnerName(self): return self._owner.name
+  def _getMods(self):
     newset = set()
     for mod in self._mods:
       newset.add(mod)
     return newset
-  def getModNames(self):
-    mods = self.getMods()
+  def _getModNames(self):
+    mods = self._getMods()
     return [x.name for x in mods]
-  def getUserCount(self): return self._userCount
-  def getSilent(self): return self._silent
-  def setSilent(self, val): self._silent = val
-  def getBanlist(self): return [record[2] for record in self._banlist]
+  def _getUserCount(self): return self._userCount
+  def _getSilent(self): return self._silent
+  def _setSilent(self, val): self._silent = val
+  def _getBanlist(self): return list(self._banlist.keys())
+  def _getUnBanlist(self): return [[record["target"], record["src"]] for record in self._unbanlist.values()]
 
-  name = property(getName)
-  botname = property(getBotName)
-  currentname = property(getCurrentname)
-  mgr = property(getManager)
-  userlist = property(getUserlist)
-  usernames = property(getUserNames)
-  user = property(getUser)
-  owner = property(getOwner)
-  ownername = property(getOwnerName)
-  mods = property(getMods)
-  modnames = property(getModNames)
-  usercount = property(getUserCount)
-  silent = property(getSilent, setSilent)
-  banlist = property(getBanlist)
+  name = property(_getName)
+  botname = property(_getBotName)
+  currentname = property(_getCurrentname)
+  mgr = property(_getManager)
+  userlist = property(_getUserlist)
+  usernames = property(_getUserNames)
+  user = property(_getUser)
+  owner = property(_getOwner)
+  ownername = property(_getOwnerName)
+  mods = property(_getMods)
+  modnames = property(_getModNames)
+  usercount = property(_getUserCount)
+  silent = property(_getSilent, _setSilent)
+  banlist = property(_getBanlist)
+  unbanlist = property(_getUnBanlist)
 
   ####
   # Feed/process
@@ -624,10 +867,7 @@ class Room:
     while self._rbuf.find(b"\x00") != -1:
       data = self._rbuf.split(b"\x00")
       for food in data[:-1]:
-        if self.unicodeCompat:
-          self._process(food.decode().rstrip("\r\n"))
-        else:
-          self._process(food.decode(errors="replace").rstrip("\r\n"))
+        self._process(food.decode(errors="replace").rstrip("\r\n"))
       self._rbuf = data[-1]
 
   def _process(self, data):
@@ -640,20 +880,23 @@ class Room:
     self._callEvent("onRaw", data)
     data = data.split(":")
     cmd, args = data[0], data[1:]
-    func = "rcmd_" + cmd
+    func = "_rcmd_" + cmd
     if hasattr(self, func):
       getattr(self, func)(args)
+    else:
+      if debug:
+        print("unknown data: "+str(data))
 
   ####
   # Received Commands
   ####
-  def rcmd_ok(self, args):
+  def _rcmd_ok(self, args):
     # if no name, join room as anon and no password
     if args[2] == "N" and self.mgr.password == None and self.mgr.name == None:
       n = args[4].rsplit('.', 1)[0]
       n = n[-4:]
       aid = args[1][0:8]
-      pid = "!anon" + getAnonId(n, aid)
+      pid = "!anon" + _getAnonId(n, aid)
       self._botname = pid
       self._currentname = pid
       self.user._nameColor = n
@@ -671,15 +914,15 @@ class Room:
     self._mods = set(map(lambda x: User(x), args[6].split(";")))
     self._i_log = list()
 
-  def rcmd_denied(self, args):
+  def _rcmd_denied(self, args):
     self._disconnect()
     self._callEvent("onConnectFail")
-    self._callEvent("onStartJoin", "denied")
 
-  def rcmd_inited(self, args):
+  def _rcmd_inited(self, args):
     self._sendCommand("g_participants", "start")
     self._sendCommand("getpremium", "1")
     self.requestBanlist()
+    self.requestUnBanlist()
     if self._connectAmmount == 0:
       self._callEvent("onConnect")
       for msg in reversed(self._i_log):
@@ -687,13 +930,12 @@ class Room:
         self._callEvent("onHistoryMessage", user, msg)
         self._addHistory(msg)
       del self._i_log
-      self._callEvent("onStartJoin", "ok")
     else:
       self._callEvent("onReconnect")
     self._connectAmmount += 1
     self._setWriteLock(False)
 
-  def rcmd_premium(self, args):
+  def _rcmd_premium(self, args):
     if float(args[1]) > time.time():
       self._premium = True
       if self.user._mbg: self.setBgMode(1)
@@ -701,7 +943,7 @@ class Room:
     else:
       self._premium = False
 
-  def rcmd_mods(self, args):
+  def _rcmd_mods(self, args):
     modnames = args
     mods = set(map(lambda x: User(x), modnames))
     premods = self._mods
@@ -713,29 +955,32 @@ class Room:
       self._callEvent("onModRemove", user)
     self._callEvent("onModChange")
 
-  def rcmd_b(self, args):
+  def _rcmd_b(self, args):
     mtime = float(args[0])
     puid = args[3]
     ip = args[6]
     name = args[1]
-    rawmsg = ":".join(args[9:]) if self.unicodeCompat else ":".join(args[9:]).encode("ascii","ignore").decode("ascii")
-    msg, n, f = clean_message(rawmsg)
+    rawmsg = ":".join(args[9:])
+    msg, n, f = _clean_message(rawmsg)
     if name == "":
       nameColor = None
       name = "#" + args[2]
       if name == "#":
-        name = "!anon" + getAnonId(n, puid)
+        name = "!anon" + _getAnonId(n, puid)
     else:
-      if n: nameColor = parseNameColor(n)
+      if n: nameColor = _parseNameColor(n)
       else: nameColor = None
     i = args[5]
     unid = args[4]
+    user = User(name)
+    if puid:
+      user.updatePuid(puid)
     #Create an anonymous message and queue it because msgid is unknown.
-    if f: fontColor, fontFace, fontSize = parseFont(f)
+    if f: fontColor, fontFace, fontSize = _parseFont(f)
     else: fontColor, fontFace, fontSize = None, None, None
     msg = Message(
       time = mtime,
-      user = User(name),
+      user = user,
       body = msg,
       raw = rawmsg,
       ip = ip,
@@ -748,7 +993,7 @@ class Room:
     )
     self._mqueue[i] = msg
 
-  def rcmd_u(self, args):
+  def _rcmd_u(self, args):
     temp = Struct(**self._mqueue)
     if hasattr(temp, args[0]):
       msg = getattr(temp, args[0])
@@ -762,47 +1007,45 @@ class Room:
       self._addHistory(msg)
       self._callEvent("onMessage", msg.user, msg)
 
-  def rcmd_i(self, args):
+  def _rcmd_i(self, args):
     mtime = float(args[0])
     puid = args[3]
     ip = args[6]
-    if ip == "": ip = None
     name = args[1]
-    rawmsg = ":".join(args[8:])
-    msg, n, f = clean_message(rawmsg)
-    msgid = args[5]
+    rawmsg = ":".join(args[9:])
+    msg, n, f = _clean_message(rawmsg)
     if name == "":
       nameColor = None
       name = "#" + args[2]
       if name == "#":
-        name = "!anon" + getAnonId(n, puid)
+        name = "!anon" + _getAnonId(n, puid)
     else:
-      if n: nameColor = parseNameColor(n)
+      if n: nameColor = _parseNameColor(n)
       else: nameColor = None
-    if f: fontColor, fontFace, fontSize = parseFont(f)
+    i = args[5]
+    unid = args[4]
+    user = User(name)
+    if puid:
+      user.updatePuid(puid)
+    #Create an anonymous message and queue it because msgid is unknown.
+    if f: fontColor, fontFace, fontSize = _parseFont(f)
     else: fontColor, fontFace, fontSize = None, None, None
-    msg = self.createMessage(
-      msgid = msgid,
+    msg = Message(
       time = mtime,
-      user = User(name),
+      user = user,
       body = msg,
       raw = rawmsg,
-      ip = args[6],
-      unid = args[4],
+      ip = ip,
       nameColor = nameColor,
       fontColor = fontColor,
       fontFace = fontFace,
       fontSize = fontSize,
+      unid = unid,
       room = self
     )
-    if msg.user != self.user:
-      msg.user._fontColor = msg.fontColor
-      msg.user._fontFace = msg.fontFace
-      msg.user._fontSize = msg.fontSize
-      msg.user._nameColor = msg.nameColor
     self._i_log.append(msg)
 
-  def rcmd_g_participants(self, args):
+  def _rcmd_g_participants(self, args):
     args = ":".join(args)
     args = args.split(";")
     for data in args:
@@ -816,22 +1059,20 @@ class Room:
       user.addSessionId(self, data[0])
       self._userlist.append(user)
 
-  def rcmd_participant(self, args):
+  def _rcmd_participant(self, args):
+    name = args[3].lower()
+    if name == "none": return
+    user = User(name)
+    puid = args[2]
+    if puid:
+      user.updatePuid(puid)
+
     if args[0] == "0": #leave
-      name = args[3].lower()
-      if name == "none": return
-      user = User(name)
       user.removeSessionId(self, args[1])
       self._userlist.remove(user)
       if user not in self._userlist or not self.mgr._userlistEventUnique:
         self._callEvent("onLeave", user)
     else: #join
-      name = args[3].lower()
-      if name == "none": return
-      user = User(
-        name = name,
-        room = self
-      )
       user.addSessionId(self, args[1])
       if user not in self._userlist: doEvent = True
       else: doEvent = False
@@ -839,66 +1080,85 @@ class Room:
       if doEvent or not self.mgr._userlistEventUnique:
         self._callEvent("onJoin", user)
 
-  def rcmd_show_fw(self, args):
+  def _rcmd_show_fw(self, args):
     self._callEvent("onFloodWarning")
 
-  def rcmd_show_tb(self, args):
+  def _rcmd_show_tb(self, args):
     self._callEvent("onFloodBan")
 
-  def rcmd_tb(self, args):
+  def _rcmd_tb(self, args):
     self._callEvent("onFloodBanRepeat")
 
-  def rcmd_delete(self, args):
-    msg = self.getMessage(args[0])
+  def _rcmd_delete(self, args):
+    msg = self._msgs.get(args[0])
     if msg:
       if msg in self._history:
         self._history.remove(msg)
         self._callEvent("onMessageDelete", msg.user, msg)
         msg.detach()
 
-  def rcmd_deleteall(self, args):
+  def _rcmd_deleteall(self, args):
     for msgid in args:
-      self.rcmd_delete([msgid])
+      self._rcmd_delete([msgid])
 
-  def rcmd_n(self, args):
+  def _rcmd_n(self, args):
     self._userCount = int(args[0], 16)
     self._callEvent("onUserCountChange")
 
-  def rcmd_blocklist(self, args):
-    self._banlist = list()
+  def _rcmd_blocklist(self, args):
+    self._banlist = dict()
     sections = ":".join(args).split(";")
     for section in sections:
       params = section.split(":")
       if len(params) != 5: continue
       if params[2] == "": continue
-      self._banlist.append((
-        params[0], #unid
-        params[1], #ip
-        User(params[2]), #target
-        float(params[3]), #time
-        User(params[4]) #src
-      ))
+      user = User(params[2])
+      self._banlist[user] = {
+        "unid":params[0],
+        "ip":params[1],
+        "target":user,
+        "time":float(params[3]),
+        "src":User(params[4])
+      }
     self._callEvent("onBanlistUpdate")
 
-  def rcmd_blocked(self, args):
+  def _rcmd_unblocklist(self, args):
+    self._unbanlist = dict()
+    sections = ":".join(args).split(";")
+    for section in sections:
+      params = section.split(":")
+      if len(params) != 5: continue
+      if params[2] == "": continue
+      user = User(params[2])
+      self._unbanlist[user] = {
+        "unid":params[0],
+        "ip":params[1],
+        "target":user,
+        "time":float(params[3]),
+        "src":User(params[4])
+      }
+    self._callEvent("onUnBanlistUpdate")
+
+  def _rcmd_blocked(self, args):
     if args[2] == "": return
     target = User(args[2])
     user = User(args[3])
-    self._banlist.append((args[0], args[1], target, float(args[4]), user))
+    self._banlist[target] = {"unid":args[0], "ip":args[1], "target":target, "time":float(args[4]), "src":user}
     self._callEvent("onBan", user, target)
-    self.requestBanlist()
 
-  def rcmd_unblocked(self, args):
+  def _rcmd_unblocked(self, args):
     if args[2] == "": return
     target = User(args[2])
     user=User(args[3])
+    del self._banlist[target]
+    self._unbanlist[user] = {"unid":args[0], "ip":args[1], "target":target, "time":float(args[4]), "src":user}
     self._callEvent("onUnban", user, target)
-    self.requestBanlist()
 
   ####
   # Commands
   ####
   def login(self, NAME, PASS = None):
+    """login as a user or set a name in room"""
     if PASS:
       self._sendCommand("blogin", NAME, PASS)
     else:
@@ -906,6 +1166,7 @@ class Room:
     self._currentname = NAME
 
   def logout(self):
+    """logout of user in a room"""
     self._sendCommand("blogout")
     self._currentname = self._botname
 
@@ -926,7 +1187,7 @@ class Room:
 
   def message(self, msg, html = False):
     """
-    Send a message.
+    Send a message. (Use "\n" for new line)
 
     @type msg: str
     @param msg: message
@@ -946,14 +1207,20 @@ class Room:
           self.message(sect, html = html)
       return
     msg = "<n" + self.user.nameColor + "/>" + msg
-    if self._currentname != None or not self._currentname.startswith("!anon"):
-      msg = "<f x%0.2i%s=\"%s\">" %(self.user.fontSize, self.user.fontColor, self.user.fontFace) + msg
+    if self._currentname != None and not self._currentname.startswith("!anon"):
+      font_properties = "<f x%0.2i%s=\"%s\">" %(self.user.fontSize, self.user.fontColor, self.user.fontFace)
+      if "\n" in msg:
+        msg.replace("\n", "</f></p><p>%s" %(font_properties))
+      msg = font_properties + msg
+    msg.replace("~","&#126;")
     self.rawMessage(msg)
 
   def setBgMode(self, mode):
+    """turn on/off bg"""
     self._sendCommand("msgbg", str(mode))
 
   def setRecordingMode(self, mode):
+    """turn on/off rcecording"""
     self._sendCommand("msgmedia", str(mode))
 
   def addMod(self, user):
@@ -963,7 +1230,7 @@ class Room:
     @type user: User
     @param user: User to mod.
     """
-    if self.getLevel(self.user) == 2:
+    if self.getLevel(User(self.currentname)) == 2:
       self._sendCommand("addmod", user.name)
 
   def removeMod(self, user):
@@ -973,7 +1240,7 @@ class Room:
     @type user: User
     @param user: User to demod.
     """
-    if self.getLevel(self.user) == 2:
+    if self.getLevel(User(self.currentname)) == 2:
       self._sendCommand("removemod", user.name)
 
   def flag(self, message):
@@ -1080,6 +1347,10 @@ class Room:
     """Request an updated banlist."""
     self._sendCommand("blocklist", "block", "", "next", "500")
 
+  def requestUnBanlist(self):
+    """Request an updated banlist."""
+    self._sendCommand("blocklist", "unblock", "", "next", "500")
+
   def rawUnban(self, name, ip, unid):
     """
     Execute the unblock command using specified arguments.
@@ -1106,7 +1377,7 @@ class Room:
     """
     rec = self._getBanRecord(user)
     if rec:
-      self.rawUnban(rec[2].name, rec[1], rec[0])
+      self.rawUnban(rec["target"].name, rec["ip"], rec["unid"])
       return True
     else:
       return False
@@ -1115,9 +1386,8 @@ class Room:
   # Util
   ####
   def _getBanRecord(self, user):
-    for record in self._banlist:
-      if record[2] == user:
-        return record
+    if user in self._banlist:
+      return self._banlist[user]
     return None
 
   def _callEvent(self, evt, *args, **kw):
@@ -1151,11 +1421,13 @@ class Room:
     self._write(":".join(args).encode() + terminator)
 
   def getLevel(self, user):
+    """get the level of user in a room"""
     if user == self._owner: return 2
     if user in self._mods: return 1
     return 0
 
   def getLastMessage(self, user = None):
+    """get last message said by user in a room"""
     if user:
       try:
         i = 1
@@ -1174,12 +1446,15 @@ class Room:
     return None
 
   def findUser(self, name):
+    """check if user is in the room
+    
+    return User(name) if name in room else None"""
     name = name.lower()
-    ul = self.getUserlist()
+    ul = self._getUserlist()
     udi = dict(zip([u.name for u in ul], ul))
     cname = None
     for n in udi.keys():
-      if n.find(name) != -1:
+      if name in n:
         if cname: return None #ambiguous!!
         cname = n
     if cname: return udi[cname]
@@ -1210,6 +1485,8 @@ class RoomManager:
   ####
   _Room = Room
   _PM = PM
+  _ANON_PM = ANON_PM
+  _anonPMHost = "b1.chatango.com"
   _PMHost = "c1.chatango.com"
   _PMPort = 5222
   _TimerResolution = 0.2 #at least x times per second
@@ -1231,11 +1508,22 @@ class RoomManager:
     self._running = False
     self._tasks = set()
     self._rooms = dict()
-    self._rooms_copy = list()
+    self._rooms_queue = queue.Queue()
+    self._rooms_lock = threading.Lock()
     if pm:
-      self._pm = self._PM(mgr = self)
+      if self._password:
+        self._pm = self._PM(mgr = self)
+      else:
+        self._pm = self._ANON_PM(mgr = self)
     else:
       self._pm = None
+
+  def _joinThread(self):
+    while True:
+      room = self._rooms_queue.get()
+      with self._rooms_lock:
+        con = self._Room(room, mgr = self)
+        self._rooms[room] = con
 
   ####
   # Join/leave
@@ -1248,13 +1536,12 @@ class RoomManager:
     @param room: room to join
 
     @rtype: Room or None
-    @return: the room or nothing
+    @return: True or nothing
     """
     room = room.lower()
     if room not in self._rooms:
-      con = self._Room(room, mgr = self)
-      self._rooms[room] = con
-      return con
+      self._rooms_queue.put(room)
+      return True
     else:
       return None
 
@@ -1267,8 +1554,9 @@ class RoomManager:
     """
     room = room.lower()
     if room in self._rooms:
-      con = self._rooms[room]
-      con.disconnect()
+      with self._rooms_lock:
+        con = self._rooms[room]
+        con.disconnect()
 
   def getRoom(self, room):
     """
@@ -1289,21 +1577,19 @@ class RoomManager:
   ####
   # Properties
   ####
-  def getUser(self): return User(self._name)
-  def getName(self): return self._name
-  def getPassword(self): return self._password
-  def getRooms(self): return set(self._rooms.values())
-  def getRoomNames(self): return set(self._rooms.keys())
-  def getRooms_copy(self): return set(self._rooms_copy)
-  def getPM(self): return self._pm
+  def _getUser(self): return User(self._name)
+  def _getName(self): return self._name
+  def _getPassword(self): return self._password
+  def _getRooms(self): return set(self._rooms.values())
+  def _getRoomNames(self): return set(self._rooms.keys())
+  def _getPM(self): return self._pm
 
-  user = property(getUser)
-  name = property(getName)
-  password = property(getPassword)
-  rooms = property(getRooms)
-  roomnames = property(getRoomNames)
-  rooms_copy = property(getRooms_copy)
-  pm = property(getPM)
+  user = property(_getUser)
+  name = property(_getName)
+  password = property(_getPassword)
+  rooms = property(_getRooms)
+  roomnames = property(_getRoomNames)
+  pm = property(_getPM)
 
   ####
   # Virtual methods
@@ -1313,25 +1599,13 @@ class RoomManager:
     pass
 
   def safePrint(self, text):
-    """ use this to safely print text with unicode"""
+    """Use this to safely print text with unicode"""
     while True:
       try:
         print(text)
         break
       except UnicodeEncodeError as ex:
         text = (text[0:ex.start]+'(unicode)'+text[ex.end:])
-
-  def onStartJoin(self, room, status):
-    """Don't edit unless you know what you are doing"""
-    if status == "ok":
-      if self._rooms_copy == []: pass
-      elif len(self._rooms_copy) > 0:
-        self.joinRoom(self._rooms_copy.pop())
-
-    elif status == "denied": # if it fail to connect, skip it
-      if self._rooms_copy == []: pass
-      elif len(self._rooms_copy) > 0:
-        self.joinRoom(self._rooms_copy.pop())
 
   def onConnect(self, room):
     """
@@ -1557,43 +1831,159 @@ class RoomManager:
     """
     pass
 
+  def onUnBanlistUpdate(self, room):
+    """
+    Called when a unbanlist gets updated.
+
+    @type room: Room
+    @param room: room where the event occured
+    """
+    pass
+
   def onPMConnect(self, pm):
+    """
+    Called when connected to the pm
+    
+    @type pm: PM
+    @param pm: the pm
+    """
+    pass
+
+  def onAnonPMDisconnect(self, pm, user):
+    """
+    Called when disconnected from the pm
+    
+    @type pm: PM
+    @param pm: the pm
+    """
     pass
 
   def onPMDisconnect(self, pm):
+    """
+    Called when disconnected from the pm
+    
+    @type pm: PM
+    @param pm: the pm
+    """
     pass
 
   def onPMPing(self, pm):
+    """
+    Called when sending a ping to the pm
+    
+    @type pm: PM
+    @param pm: the pm
+    """
     pass
 
   def onPMMessage(self, pm, user, body):
+    """
+    Called when a message is received
+    
+    @type pm: PM
+    @param pm: the pm
+    @type user: User
+    @param user: owner of message
+    @type message: Message
+    @param message: received message
+    """
     pass
 
   def onPMOfflineMessage(self, pm, user, body):
+    """
+    Called when connected if a message is received while offline
+    
+    @type pm: PM
+    @param pm: the pm
+    @type user: User
+    @param user: owner of message
+    @type message: Message
+    @param message: received message
+    """
     pass
 
   def onPMContactlistReceive(self, pm):
+    """
+    Called when the contact list is received
+    
+    @type pm: PM
+    @param pm: the pm
+    """
     pass
 
   def onPMBlocklistReceive(self, pm):
+    """
+    Called when the block list is received
+    
+    @type pm: PM
+    @param pm: the pm
+    """
     pass
 
   def onPMContactAdd(self, pm, user):
+    """
+    Called when the contact added message is received
+    
+    @type pm: PM
+    @param pm: the pm
+    @type user: User
+    @param user: the user that gotten added
+    """
     pass
 
   def onPMContactRemove(self, pm, user):
+    """
+    Called when the contact remove message is received
+    
+    @type pm: PM
+    @param pm: the pm
+    @type user: User
+    @param user: the user that gotten remove
+    """
     pass
 
   def onPMBlock(self, pm, user):
+    """
+    Called when successfully block a user
+    
+    @type pm: PM
+    @param pm: the pm
+    @type user: User
+    @param user: the user that gotten block
+    """
     pass
 
   def onPMUnblock(self, pm, user):
+    """
+    Called when successfully unblock a user
+    
+    @type pm: PM
+    @param pm: the pm
+    @type user: User
+    @param user: the user that gotten unblock
+    """
     pass
 
   def onPMContactOnline(self, pm, user):
+    """
+    Called when a user from the contact come online
+    
+    @type pm: PM
+    @param pm: the pm
+    @type user: User
+    @param user: the user that came online
+    """
     pass
 
   def onPMContactOffline(self, pm, user):
+    """
+    Called when a user from the contact go offline
+    
+    @type pm: PM
+    @param pm: the pm
+    @type user: User
+    @param user: the user that went offline
+    """
     pass
 
   def onEventCalled(self, room, evt, *args, **kw):
@@ -1708,7 +2098,7 @@ class RoomManager:
   def getConnections(self):
     li = list(self._rooms.values())
     if self._pm:
-      li.append(self._pm)
+      li.extend(self._pm.getConnections())
     return [c for c in li if c._sock != None]
 
   ####
@@ -1717,6 +2107,10 @@ class RoomManager:
   def main(self):
     self.onInit()
     self._running = True
+    for l in range(0,Number_of_Threads):
+      t = threading.Thread(target=self._joinThread)
+      t.daemon = True
+      t.start()
     while self._running:
       conns = self.getConnections()
       socks = [x._sock for x in conns]
@@ -1760,9 +2154,8 @@ class RoomManager:
     if not password: password = str(input("User password: "))
     if password == "": password = None
     self = cl(name, password, pm = pm)
-    self._rooms_copy=rooms[:]
-    if len(self._rooms_copy)>0:
-        self.joinRoom(self._rooms_copy.pop())
+    for room in rooms:
+      self.joinRoom(room)
     self.main()
 
   def stop(self):
@@ -1855,6 +2248,7 @@ class _User:
   ####
   def __init__(self, name, **kw):
     self._name = name.lower()
+    self._puid = ""
     self._sids = dict()
     self._msgs = list()
     self._nameColor = "000"
@@ -1870,27 +2264,29 @@ class _User:
   ####
   # Properties
   ####
-  def getName(self): return self._name
-  def getSessionIds(self, room = None):
+  def _getName(self): return self._name
+  def _getPuid(self): return self._puid
+  def _getSessionIds(self, room = None):
     if room:
       return self._sids.get(room, set())
     else:
       return set.union(*self._sids.values())
-  def getRooms(self): return self._sids.keys()
-  def getRoomNames(self): return [room.name for room in self.getRooms()]
-  def getFontColor(self): return self._fontColor
-  def getFontFace(self): return self._fontFace
-  def getFontSize(self): return self._fontSize
-  def getNameColor(self): return self._nameColor
+  def _getRooms(self): return self._sids.keys()
+  def _getRoomNames(self): return [room.name for room in self._getRooms()]
+  def _getFontColor(self): return self._fontColor
+  def _getFontFace(self): return self._fontFace
+  def _getFontSize(self): return self._fontSize
+  def _getNameColor(self): return self._nameColor
 
-  name = property(getName)
-  sessionids = property(getSessionIds)
-  rooms = property(getRooms)
-  roomnames = property(getRoomNames)
-  fontColor = property(getFontColor)
-  fontFace = property(getFontFace)
-  fontSize = property(getFontSize)
-  nameColor = property(getNameColor)
+  name = property(_getName)
+  puid = property(_getPuid)
+  sessionids = property(_getSessionIds)
+  rooms = property(_getRooms)
+  roomnames = property(_getRoomNames)
+  fontColor = property(_getFontColor)
+  fontFace = property(_getFontFace)
+  fontSize = property(_getFontSize)
+  nameColor = property(_getNameColor)
 
   ####
   # Util
@@ -1922,6 +2318,9 @@ class _User:
         return False
     except KeyError:
       return False
+
+  def updatePuid(self, puid):
+    self._puid = puid
 
   ####
   # Repr
@@ -1959,6 +2358,7 @@ class Message:
   # Init
   ####
   def __init__(self, **kw):
+    """init, don't overwrite"""
     self._msgid = None
     self._time = None
     self._user = None
@@ -1978,28 +2378,28 @@ class Message:
   ####
   # Properties
   ####
-  def getId(self): return self._msgid
-  def getTime(self): return self._time
-  def getUser(self): return self._user
-  def getBody(self): return self._body
-  def getIP(self): return self._ip
-  def getFontColor(self): return self._fontColor
-  def getFontFace(self): return self._fontFace
-  def getFontSize(self): return self._fontSize
-  def getNameColor(self): return self._nameColor
-  def getRoom(self): return self._room
-  def getRaw(self): return self._raw
-  def getUnid(self): return self._unid
+  def _getId(self): return self._msgid
+  def _getTime(self): return self._time
+  def _getUser(self): return self._user
+  def _getBody(self): return self._body
+  def _getIP(self): return self._ip
+  def _getFontColor(self): return self._fontColor
+  def _getFontFace(self): return self._fontFace
+  def _getFontSize(self): return self._fontSize
+  def _getNameColor(self): return self._nameColor
+  def _getRoom(self): return self._room
+  def _getRaw(self): return self._raw
+  def _getUnid(self): return self._unid
 
-  msgid = property(getId)
-  time = property(getTime)
-  user = property(getUser)
-  body = property(getBody)
-  room = property(getRoom)
-  ip = property(getIP)
-  fontColor = property(getFontColor)
-  fontFace = property(getFontFace)
-  fontSize = property(getFontSize)
-  raw = property(getRaw)
-  nameColor = property(getNameColor)
-  unid = property(getUnid)
+  msgid = property(_getId)
+  time = property(_getTime)
+  user = property(_getUser)
+  body = property(_getBody)
+  room = property(_getRoom)
+  ip = property(_getIP)
+  fontColor = property(_getFontColor)
+  fontFace = property(_getFontFace)
+  fontSize = property(_getFontSize)
+  raw = property(_getRaw)
+  nameColor = property(_getNameColor)
+  unid = property(_getUnid)

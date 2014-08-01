@@ -849,7 +849,7 @@ class Room:
   mods = property(_getMods)
   modnames = property(_getModNames)
   usercount = property(_getUserCount)
-  silent = property(_getSilent, _setSilent)
+  silent = property(_getSilent, setSilent)
   banlist = property(_getBanlist)
   unbanlist = property(_getUnBanlist)
 

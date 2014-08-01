@@ -794,17 +794,17 @@ class Room:
   ####
   # Properties
   ####
-  def _getName(self): return self._name
-  def _getBotName(self):
+  def getName(self): return self._name
+  def getBotName(self):
     if self.mgr.name and self.mgr.password:
       return self.mgr.name
     elif self.mgr.name and self.mgr.password == None:
       return "#" + self.mgr.name
     elif self.mgr.name == None:
       return self._botname
-  def _getCurrentname(self): return self._currentname
-  def _getManager(self): return self._mgr
-  def _getUserlist(self, mode = None, unique = None, memory = None):
+  def getCurrentname(self): return self._currentname
+  def getManager(self): return self._mgr
+  def getUserlist(self, mode = None, unique = None, memory = None):
     ul = None
     if mode == None: mode = self.mgr._userlistMode
     if unique == None: unique = self.mgr._userlistUnique
@@ -817,41 +817,41 @@ class Room:
       return list(set(ul))
     else:
       return ul
-  def _getUserNames(self):
+  def getUserNames(self):
     ul = self.userlist
     return list(map(lambda x: x.name, ul))
-  def _getUser(self): return self.mgr.user
-  def _getOwner(self): return self._owner
-  def _getOwnerName(self): return self._owner.name
-  def _getMods(self):
+  def getUser(self): return self.mgr.user
+  def getOwner(self): return self._owner
+  def getOwnerName(self): return self._owner.name
+  def getMods(self):
     newset = set()
     for mod in self._mods:
       newset.add(mod)
     return newset
-  def _getModNames(self):
+  def getModNames(self):
     mods = self._getMods()
     return [x.name for x in mods]
-  def _getUserCount(self): return self._userCount
-  def _getSilent(self): return self._silent
+  def getUserCount(self): return self._userCount
+  def getSilent(self): return self._silent
   def setSilent(self, val): self._silent = val
-  def _getBanlist(self): return list(self._banlist.keys())
-  def _getUnBanlist(self): return [[record["target"], record["src"]] for record in self._unbanlist.values()]
+  def getBanlist(self): return list(self._banlist.keys())
+  def getUnBanlist(self): return [[record["target"], record["src"]] for record in self._unbanlist.values()]
 
-  name = property(_getName)
-  botname = property(_getBotName)
-  currentname = property(_getCurrentname)
-  mgr = property(_getManager)
-  userlist = property(_getUserlist)
-  usernames = property(_getUserNames)
-  user = property(_getUser)
-  owner = property(_getOwner)
-  ownername = property(_getOwnerName)
-  mods = property(_getMods)
-  modnames = property(_getModNames)
-  usercount = property(_getUserCount)
-  silent = property(_getSilent, setSilent)
-  banlist = property(_getBanlist)
-  unbanlist = property(_getUnBanlist)
+  name = property(getName)
+  botname = property(getBotName)
+  currentname = property(getCurrentname)
+  mgr = property(getManager)
+  userlist = property(getUserlist)
+  usernames = property(getUserNames)
+  user = property(getUser)
+  owner = property(getOwner)
+  ownername = property(getOwnerName)
+  mods = property(getMods)
+  modnames = property(getModNames)
+  usercount = property(getUserCount)
+  silent = property(getSilent, setSilent)
+  banlist = property(getBanlist)
+  unbanlist = property(getUnBanlist)
 
   ####
   # Feed/process
